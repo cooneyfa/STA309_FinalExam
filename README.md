@@ -3,7 +3,7 @@ Overview
 For my final exam, I chose to analyze NFL Combine data from Pro Football Reference. I built predictive models to determine whether or not a player will be drafted. The merged dataset includes height, weight, 40-yard dash, vertical jump, BMI, and a positional group variable.
 
 Dataset Sources
-Combine Data (PFR): https://www.pro-football-reference.com/draft/2024-combine.htm
+Combine Data (PFR): https://www.pro-football-reference.com/draft/2024-combine.htm  
 Draft Results (PFR): https://www.pro-football-reference.com/years/2024/draft.htm
 
 
