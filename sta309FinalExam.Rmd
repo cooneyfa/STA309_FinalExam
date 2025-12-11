@@ -1,0 +1,249 @@
+---
+title: "FinalExam"
+author: "finnbarcooney"
+date: "2025-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#loading libraries
+library(tidyverse)
+library(rvest)
+library(caret)        
+library(rpart)       
+library(randomForest) 
+library(gridExtra)    
+library(janitor)      
+library(gridExtra)    
+library(grid)         
+library(corrplot)    
+library(kernlab)      
+
+
+# reading draft data from the 2024 NFL combine and season
+#prediciting whether or not a player will be drafted (response variable) based off of thier combine stat
+# using predictor variables such as verticle, shuttle run, 40 time, position group(categorical), bmi
+url_combine <- "https://www.pro-football-reference.com/draft/2024-combine.htm"
+url_draft   <- "https://www.pro-football-reference.com/years/2024/draft.htm"
+
+
+#checked headers
+#draft_raw_check <- read_html(url_draft) %>%
+#  html_node("table#drafts") %>%
+#  html_table() %>%
+ # clean_names()
+#print(names(draft_raw_check))
+
+
+#loading and cleaning data
+#targeting specific combine table
+combine_raw <- read_html(url_combine) %>%
+  html_node("table#combine") %>% 
+  html_table() %>%
+  clean_names() %>%
+  filter(!is.na(player), player != "Player")
+
+# trageting and cleaning draft table from 2024
+draft_raw <- read_html(url_draft) %>%
+  html_node("table#drafts") %>% 
+  html_table() %>%
+  clean_names()
+
+# clean draft data (remove header rows, keep key columns)
+# showing column names at x_2, x_4, etc
+draft_data_clean <- draft_raw %>%
+  filter(x != "Rnd") %>% 
+  select(player = x_4, tm = x_3, rnd = x, pick = x_2) %>% 
+  rename(Round = rnd, Pick = pick, Team = tm)
+
+#checking row counts
+cat("Combine Data Rows:", nrow(combine_raw), "\n")
+cat("Draft Data Rows:", nrow(draft_data_clean), "\n")
+
+# merge combine and draft tables 
+#keeps all combine players
+data_merged <- combine_raw %>%
+  left_join(draft_data_clean, by = "player") %>%
+  filter(!is.na(pos)) 
+
+
+#helper function to convert heights like "6-2" to inches "74"
+parse_height <- function(h) {
+  suppressWarnings({
+    parts <- as.numeric(unlist(strsplit(h, "-")))
+    if(length(parts) == 2) { return(parts[1]*12 + parts[2]) } else { return(NA) }
+  })
+}
+
+# create response variable + clean features
+df_clean <- data_merged %>%
+  rowwise() %>%
+  mutate(
+    # response variable, drafted Yes or No
+    Drafted = factor(ifelse(is.na(Team), "No", "Yes"), levels = c("No", "Yes")),
+    
+    # cleaning numeric vars
+    Height_in = parse_height(ht),
+    Weight_lbs = as.numeric(wt),
+    Forty_Yard = as.numeric(x40yd),
+    Vertical   = as.numeric(vertical),
+    Bench      = as.numeric(bench),
+    
+    #derived variable is BMI 
+    #formula for BMI
+    BMI = (Weight_lbs / (Height_in^2)) * 703
+  ) %>%
+  ungroup() %>%
+  
+  #using positions as a categorical variable
+  #regrouping all positions into simplier groups
+  mutate(
+    Position_Group = case_when(
+      pos %in% c("QB", "RB", "WR", "TE") ~ "Skill",
+      pos %in% c("OT", "OG", "C") ~ "OL",
+      pos %in% c("DL", "DT", "DE", "EDGE") ~ "DL",
+      pos %in% c("LB", "ILB", "OLB") ~ "LB",
+      pos %in% c("CB", "S", "DB") ~ "DB",
+      TRUE ~ "Specialist/Other"
+    )
+  )
+
+#getting the median in order to inpute missing variables
+#this will be the median of thier position group:such as skill, db, etc
+df_final <- df_clean %>%
+  group_by(Position_Group) %>%
+  mutate(
+    Forty_Yard = ifelse(is.na(Forty_Yard), median(Forty_Yard, na.rm=TRUE), Forty_Yard),
+    Vertical   = ifelse(is.na(Vertical), median(Vertical, na.rm=TRUE), Vertical),
+    BMI        = ifelse(is.na(BMI), median(BMI, na.rm=TRUE), BMI),
+    Weight_lbs = ifelse(is.na(Weight_lbs), median(Weight_lbs, na.rm=TRUE), Weight_lbs)
+  ) %>%
+  ungroup() %>%
+  select(Player = player, Drafted, Position_Group, Height_in, Weight_lbs, Forty_Yard, Vertical, BMI) %>%
+  drop_na() 
+
+#final check on the cleaned data set
+cat("\nFinal Clean Data Rows:", nrow(df_final), "\n")
+str(df_final)
+
+
+```
+
+
+
+```{r cars}
+# creating boxplot using speed (40 time) vs Drafted
+p1 <- ggplot(df_final, aes(x = Drafted, y = Forty_Yard, fill = Drafted)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Is Speed Essential?", subtitle = "Drafted players are faster (lower 40 time)", y = "40-Yard Dash") +
+  theme_minimal() + theme(legend.position = "none")
+
+# building density plot using BMI
+p2 <- ggplot(df_final, aes(x = BMI, fill = Drafted)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Does BMI Affect Getting Drafted?", subtitle = "Drafted players mostly have higher BMI", x = "BMI") +
+  theme_minimal()
+
+# bar chart draft rate with regards to position
+p3 <- ggplot(df_final, aes(x = Position_Group, fill = Drafted)) +
+  geom_bar(position = "fill") +
+  labs(title = "Draft Probability by Position", subtitle = "OL and DL are highly valued", y = "Proportion") +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() + theme_minimal()
+
+# scatter plot: Height vs Weight
+p4 <- ggplot(df_final, aes(x = Weight_lbs, y = Height_in, color = Drafted)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Examining Size in the NFL Draft", subtitle = "Distinct clusters for linemen vs skill players", x = "Weight (lbs)", y = "Height (in)") +
+  theme_minimal()
+
+#Violin plot with vertical jump
+p5 <- ggplot(df_final, aes(x = Drafted, y = Vertical, fill = Drafted)) +
+  geom_violin(trim = FALSE) +
+  geom_boxplot(width=0.1, fill="white") +
+  labs(title = "Explosiveness (Vertical Jump)", subtitle = "Drafted players showing higher average vertical") +
+  theme_minimal() + theme(legend.position = "none")
+
+# Create dashboard
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2, 
+             top = textGrob("NFL Draft Analysis Dashboard", gp=gpar(fontsize=20, font=2)))
+
+#saving dashboard for GitHub
+#g <- arrangeGrob(p1, p2, p3, p4, p5, ncol = 2,
+                 #top = textGrob("NFL Draft Analysis Dashboard", gp=gpar(fontsize=20, font=2)))
+
+#ggsave("plots/dashboard.png", g, width = 12, height = 10, dpi = 300)
+
+```
+
+
+
+```{r pressure, echo=FALSE}
+#setting up cross validation
+set.seed(123)
+train_control <- trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary)
+
+#defining predictors
+#my subset model will only use speed, height, position
+subset_formula <- Drafted ~ Forty_Yard + Height_in + Position_Group
+
+
+#training the LR model
+set.seed(123)
+model_glm <- train(Drafted ~ ., data = df_final, method = "glm", metric = "ROC", trControl = train_control)
+
+# training the decision tree model
+set.seed(123)
+model_tree <- train(subset_formula, data = df_final, method = "rpart", metric = "ROC", trControl = train_control)
+
+#Training the RF model
+set.seed(123)
+model_rf <- train(Drafted ~ ., data = df_final, method = "rf", metric = "ROC", trControl = train_control)
+
+#training the KNN model
+set.seed(123)
+model_knn <- train(subset_formula, data = df_final, method = "knn", 
+                   preProcess = c("center", "scale"), metric = "ROC", trControl = train_control)
+
+# SVM model
+set.seed(123)
+model_svm <- train(Drafted ~ ., data = df_final, method = "svmLinear", 
+                   preProcess = c("center", "scale"), metric = "ROC", trControl = train_control)
+
+#collecting metrics from models
+results <- resamples(list(
+  Logistic = model_glm, 
+  DecisionTree = model_tree, 
+  RandomForest = model_rf, 
+  KNN = model_knn, 
+  SVM = model_svm
+))
+
+#results
+summary(results)
+
+#visualization of model performances
+dotplot(results, main = "Model Performance Comparison (ROC, Sensitivity, Specificity)")
+
+#dp <- dotplot(results, main = "Model Performance Comparison (ROC, Sensitivity, Specificity)")
+#ggsave("plots/model_comparison.png",
+     #  gridExtra::grid.arrange(dp),
+      # width = 8, height = 6, dpi = 300)
+
+
+```
+Model Breakdown:
+
+I used logistic regression because it gives a simple baseline model and helps show whether a straight, line relationship can separate drafted from non drafted players. For my logistic regression model essentially predicted the same outcome for everyone. It has a ROC of 0.5.
+
+I used a decision tree because it creates easy rules to understand and interpret, this let me see how individual combine stats  influence draft outcomes. My decision tree model tried to create specific rules. For example, if 40-yard dash is < 4.5 then... but it struggled to generalize. It performed only slightly better than a random guess. Im guessing it did this because the rules for a Lineman are much much different than for a skill player or DB.
+
+I selected random forest because it handles nonlinear interactions between physical predictors and variables better than other models. The random forest model was the best performing model. It combined many different decision trees and was able to find some signal with an ROC of ~0.61. However, it still struggled to identify the "Drafted" players correctly.
+
+I added KNN because it tests whether players who are physically similar to already-drafted athletes tend to be drafted as well. The K-Nearest Neighbors or (KNN) looked for "similar" athletes to make predictions, but it performed poorly. This tells us that just because a player has the same height and weight as a pro, it doesn't mean they have the same talent level.
+
+I used an SVM because it can help detect patterns logistic regression mightve missed. The SVM model was not at all the best because realized that since most players in the dataset get drafted, it could achieve high accuracy by just predicting "Drafted" for everyone, which is why its Sensitivity or "Not Drafted" was zero.
+
+The Random Forest was the best model because it had the highest Area Under the Curve, meaning it was the only one that actually ranked players somewhat correctly. However, all models shared a major limitation: they were biased toward the majority class. 
+
+The takeaway from this dataset is that phyiscal stats are not enough to predict NFL draft day or an NFL carrer. Even the best model could barely beat a 50/50. This means that there is much more that goes into draft day than just the numbers at the combine. Another implication is that honestly, teams care way more about film, interviews, medicals, and scheme fit. None of which show up in combine numbers.
