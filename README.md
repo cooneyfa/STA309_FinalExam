@@ -9,10 +9,16 @@ Draft Results (PFR): https://www.pro-football-reference.com/years/2024/draft.htm
 
 
 Models Used
+
 Logistic Regression
+
 Decision Tree
+
 Random Forest
+
 K-Nearest Neighbors
+
 Support Vector Machine
 
-Key findings include: Random Forest performed best (ROC ≈ 0.61), but all models struggled due to class imbalance and the limited predictive value of physical metrics alone.
+Key findings include: 
+Random Forest performed best (ROC ≈ 0.61), but all models struggled due to class imbalance and the limited predictive value of physical metrics alone.
